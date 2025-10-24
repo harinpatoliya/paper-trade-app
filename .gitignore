@@ -1,0 +1,5 @@
+.env
+backend/.env
+backend/fyers_token.txt
+backend/logs/
+backend/paper_trading.db
