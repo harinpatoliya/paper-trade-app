@@ -5,6 +5,8 @@
     --header-bg-color: #f2f2f2;
     --button-bg-color: #4CAF50;
     --button-text-color: #fff;
+    --tab-bg-color: #f1f1f1;
+    --tab-active-bg-color: #ccc;
 }
 
 .dark-mode {
@@ -14,6 +16,8 @@
     --header-bg-color: #444;
     --button-bg-color: #555;
     --button-text-color: #fff;
+    --tab-bg-color: #555;
+    --tab-active-bg-color: #777;
 }
 
 body {
@@ -171,4 +175,32 @@ input:checked + .slider:before {
 
 .slider.round:before {
     border-radius: 50%;
+}
+
+/* Tabs */
+.tabs {
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    background-color: var(--tab-bg-color);
+}
+
+.tablink {
+    background-color: inherit;
+    float: left;
+    border: none;
+    outline: none;
+    cursor: pointer;
+    padding: 14px 16px;
+    transition: 0.3s;
+}
+
+.tablink:hover {
+    background-color: var(--tab-active-bg-color);
+}
+
+.tabcontent {
+    display: none;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-top: none;
 }

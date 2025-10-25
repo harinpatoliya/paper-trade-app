@@ -3,6 +3,9 @@ from fyers_auth import get_fyers_model
 import sqlite3
 import os
 import time
+import threading
+from datetime import datetime
+import pytz
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 
@@ -16,12 +19,10 @@ fyers = get_fyers_model()
 DB_FILE = "backend/paper_trading.db"
 
 def init_db():
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
-        CREATE TABLE portfolio (
+        CREATE TABLE IF NOT EXISTS portfolio (
             symbol TEXT PRIMARY KEY,
             quantity INTEGER,
             avg_price REAL,
@@ -29,7 +30,7 @@ def init_db():
         )
     """)
     c.execute("""
-        CREATE TABLE orders (
+        CREATE TABLE IF NOT EXISTS orders (
             order_id TEXT PRIMARY KEY,
             symbol TEXT,
             quantity INTEGER,
@@ -38,14 +39,99 @@ def init_db():
             status TEXT
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS account (
+            balance REAL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS trade_history (
+            trade_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            quantity INTEGER,
+            buy_price REAL,
+            sell_price REAL,
+            pnl REAL
+        )
+    """)
+    # Check if account exists
+    c.execute("SELECT * FROM account")
+    if not c.fetchone():
+        c.execute("INSERT INTO account (balance) VALUES (?)", (300000,))
     conn.commit()
     conn.close()
 
 init_db()
 
+def is_market_open():
+    tz = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(tz)
+    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now <= market_close
+
+def execute_pending_orders():
+    while True:
+        if is_market_open():
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT * FROM orders WHERE status='PENDING'")
+            pending_orders = c.fetchall()
+
+            for order in pending_orders:
+                order_id, symbol, quantity, price, order_type, _ = order
+                quote_response = fyers.quotes({"symbols": symbol})
+                if quote_response["code"] == 200 and quote_response["d"]:
+                    current_price = quote_response["d"][0]["v"]["lp"]
+
+                    # Check if limit price is reached
+                    if (quantity > 0 and current_price <= price) or (quantity < 0 and current_price >= price):
+                        # Execute the order
+                        c.execute("UPDATE orders SET status='EXECUTED' WHERE order_id=?", (order_id,))
+
+                        # Update portfolio
+                        c.execute("SELECT quantity, avg_price FROM portfolio WHERE symbol=?", (symbol,))
+                        row = c.fetchone()
+                        if row:
+                            new_quantity = row[0] + quantity
+                            if new_quantity > 0:
+                                if quantity > 0: # Buy order
+                                    new_avg_price = ((row[0] * row[1]) + (quantity * price)) / new_quantity
+                                else: # Sell order
+                                    new_avg_price = row[1]
+                                c.execute("UPDATE portfolio SET quantity=?, avg_price=? WHERE symbol=?", (new_quantity, new_avg_price, symbol))
+                            else:
+                                pnl = (price - row[1]) * abs(quantity)
+                                c.execute("INSERT INTO trade_history (symbol, quantity, buy_price, sell_price, pnl) VALUES (?, ?, ?, ?, ?)",
+                                          (symbol, abs(quantity), row[1], price, pnl))
+                                c.execute("DELETE FROM portfolio WHERE symbol=?", (symbol,))
+                        elif quantity > 0:
+                            c.execute("INSERT INTO portfolio (symbol, quantity, avg_price, notes) VALUES (?, ?, ?, ?)", (symbol, quantity, price, ""))
+
+                        # Update account balance
+                        c.execute("SELECT balance FROM account")
+                        balance = c.fetchone()[0]
+                        new_balance = balance - (quantity * price)
+                        c.execute("UPDATE account SET balance=?", (new_balance,))
+
+            conn.commit()
+            conn.close()
+        time.sleep(10) # Check every 10 seconds
+
+threading.Thread(target=execute_pending_orders, daemon=True).start()
+
 @app.route("/")
 def index():
     return send_from_directory(app.static_folder, 'index.html')
+
+@app.route("/api/account")
+def get_account():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT balance FROM account")
+    balance = c.fetchone()[0]
+    conn.close()
+    return jsonify({"balance": balance})
 
 @app.route("/api/profile")
 def get_profile():
@@ -75,6 +161,24 @@ def get_portfolio():
     conn.close()
     return jsonify(portfolio)
 
+@app.route("/api/pending_orders")
+def get_pending_orders():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM orders WHERE status='PENDING'")
+    orders = [{"order_id": row[0], "symbol": row[1], "quantity": row[2], "price": row[3], "order_type": row[4], "status": row[5]} for row in c.fetchall()]
+    conn.close()
+    return jsonify(orders)
+
+@app.route("/api/trade_history")
+def get_trade_history():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM trade_history")
+    history = [{"trade_id": row[0], "symbol": row[1], "quantity": row[2], "buy_price": row[3], "sell_price": row[4], "pnl": row[5]} for row in c.fetchall()]
+    conn.close()
+    return jsonify(history)
+
 @app.route("/api/portfolio/notes", methods=["POST"])
 def update_notes():
     data = request.get_json()
@@ -94,6 +198,9 @@ def update_notes():
 
 @app.route("/api/orders", methods=["POST"])
 def place_order():
+    if not is_market_open():
+        return jsonify({"error": "Market is closed"}), 400
+
     data = request.get_json()
     symbol = data.get("symbol")
     quantity = data.get("quantity")
@@ -103,38 +210,57 @@ def place_order():
     if not all([symbol, quantity, order_type]):
         return jsonify({"error": "Missing required fields"}), 400
 
-    # Fetch current price for market orders
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
     if order_type == "MARKET":
         quote_response = fyers.quotes({"symbols": symbol})
         if quote_response["code"] == 200 and quote_response["d"]:
             price = quote_response["d"][0]["v"]["lp"]
         else:
+            conn.close()
             return jsonify({"error": "Failed to fetch market price"}), 500
-
-    # Simulate order execution
-    order_id = f"paper_{symbol}_{quantity}_{order_type}_{int(time.time())}"
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO orders (order_id, symbol, quantity, price, order_type, status) VALUES (?, ?, ?, ?, ?, ?)",
-              (order_id, symbol, quantity, price, order_type, "EXECUTED"))
-
-    # Update portfolio
-    c.execute("SELECT quantity, avg_price FROM portfolio WHERE symbol=?", (symbol,))
-    row = c.fetchone()
-    if row:
-        new_quantity = row[0] + quantity
-        if new_quantity > 0:
-            if quantity > 0: # Buy order
-                new_avg_price = ((row[0] * row[1]) + (quantity * price)) / new_quantity
-            else: # Sell order
-                new_avg_price = row[1]
-            c.execute("UPDATE portfolio SET quantity=?, avg_price=? WHERE symbol=?", (new_quantity, new_avg_price, symbol))
-        else:
-            c.execute("DELETE FROM portfolio WHERE symbol=?", (symbol,))
-    elif quantity > 0:
-        c.execute("INSERT INTO portfolio (symbol, quantity, avg_price, notes) VALUES (?, ?, ?, ?)", (symbol, quantity, price, ""))
+        status = "EXECUTED"
     else:
-        return jsonify({"error": "Cannot sell a stock you don't own"}), 400
+        status = "PENDING"
+
+    # Check for sufficient funds for buy orders
+    if quantity > 0:
+        c.execute("SELECT balance FROM account")
+        balance = c.fetchone()[0]
+        if balance < quantity * price:
+            conn.close()
+            return jsonify({"error": "Insufficient funds"}), 400
+
+    order_id = f"paper_{symbol}_{quantity}_{order_type}_{int(time.time())}"
+    c.execute("INSERT INTO orders (order_id, symbol, quantity, price, order_type, status) VALUES (?, ?, ?, ?, ?, ?)",
+              (order_id, symbol, quantity, price, order_type, status))
+
+    if status == "EXECUTED":
+        # Update portfolio
+        c.execute("SELECT quantity, avg_price FROM portfolio WHERE symbol=?", (symbol,))
+        row = c.fetchone()
+        if row:
+            new_quantity = row[0] + quantity
+            if new_quantity > 0:
+                if quantity > 0: # Buy order
+                    new_avg_price = ((row[0] * row[1]) + (quantity * price)) / new_quantity
+                else: # Sell order
+                    new_avg_price = row[1]
+                c.execute("UPDATE portfolio SET quantity=?, avg_price=? WHERE symbol=?", (new_quantity, new_avg_price, symbol))
+            else:
+                pnl = (price - row[1]) * abs(quantity)
+                c.execute("INSERT INTO trade_history (symbol, quantity, buy_price, sell_price, pnl) VALUES (?, ?, ?, ?, ?)",
+                          (symbol, abs(quantity), row[1], price, pnl))
+                c.execute("DELETE FROM portfolio WHERE symbol=?", (symbol,))
+        elif quantity > 0:
+            c.execute("INSERT INTO portfolio (symbol, quantity, avg_price, notes) VALUES (?, ?, ?, ?)", (symbol, quantity, price, ""))
+
+        # Update account balance
+        c.execute("SELECT balance FROM account")
+        balance = c.fetchone()[0]
+        new_balance = balance - (quantity * price)
+        c.execute("UPDATE account SET balance=?", (new_balance,))
 
     conn.commit()
     conn.close()

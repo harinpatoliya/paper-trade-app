@@ -1,11 +1,28 @@
 const portfolioTable = document.getElementById("portfolio-table").getElementsByTagName("tbody")[0];
+const ordersTable = document.getElementById("orders-table").getElementsByTagName("tbody")[0];
+const historyTable = document.getElementById("history-table").getElementsByTagName("tbody")[0];
 const orderForm = document.getElementById("order-form");
 const sellModal = document.getElementById("sell-modal");
 const sellForm = document.getElementById("sell-form");
 const closeModal = document.getElementsByClassName("close")[0];
 const usernameSpan = document.getElementById("username");
 const accountIdSpan = document.getElementById("account-id");
+const balanceSpan = document.getElementById("balance");
 const themeToggle = document.getElementById("theme-toggle");
+
+function openTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    tabcontent = document.getElementsByClassName("tabcontent");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = "none";
+    }
+    tablinks = document.getElementsByClassName("tablink");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+    }
+    document.getElementById(tabName).style.display = "block";
+    evt.currentTarget.className += " active";
+}
 
 // Function to fetch and display the portfolio
 async function fetchPortfolio() {
@@ -60,6 +77,36 @@ async function fetchPortfolio() {
         sellButton.innerText = "Sell";
         sellButton.addEventListener("click", () => openSellModal(item.symbol, item.quantity));
         row.insertCell(7).appendChild(sellButton);
+    }
+}
+
+// Function to fetch and display pending orders
+async function fetchPendingOrders() {
+    const response = await fetch("/api/pending_orders");
+    const orders = await response.json();
+    ordersTable.innerHTML = "";
+    for (const order of orders) {
+        const row = ordersTable.insertRow();
+        row.insertCell(0).innerText = order.order_id;
+        row.insertCell(1).innerText = order.symbol;
+        row.insertCell(2).innerText = order.quantity;
+        row.insertCell(3).innerText = order.price;
+        row.insertCell(4).innerText = order.order_type;
+    }
+}
+
+// Function to fetch and display trade history
+async function fetchTradeHistory() {
+    const response = await fetch("/api/trade_history");
+    const history = await response.json();
+    historyTable.innerHTML = "";
+    for (const trade of history) {
+        const row = historyTable.insertRow();
+        row.insertCell(0).innerText = trade.symbol;
+        row.insertCell(1).innerText = trade.quantity;
+        row.insertCell(2).innerText = trade.buy_price;
+        row.insertCell(3).innerText = trade.sell_price;
+        row.insertCell(4).innerText = trade.pnl.toFixed(2);
     }
 }
 
@@ -123,9 +170,14 @@ async function placeSellOrder(event) {
     });
 
     const result = await response.json();
-    alert(result.message);
-    sellModal.style.display = "none";
-    fetchPortfolio();
+    if (response.ok) {
+        alert(result.message);
+        sellModal.style.display = "none";
+        fetchPortfolio();
+        fetchAccountBalance();
+    } else {
+        alert(`Error: ${result.error}`);
+    }
 }
 
 // Function to place a buy order
@@ -153,8 +205,13 @@ async function placeBuyOrder(event) {
     });
 
     const result = await response.json();
-    alert(result.message);
-    fetchPortfolio();
+    if (response.ok) {
+        alert(result.message);
+        fetchPortfolio();
+        fetchAccountBalance();
+    } else {
+        alert(`Error: ${result.error}`);
+    }
 }
 
 // Function to fetch and display user profile
@@ -163,6 +220,13 @@ async function fetchProfile() {
     const profile = await response.json();
     usernameSpan.innerText = profile.username;
     accountIdSpan.innerText = profile.account_id;
+}
+
+// Function to fetch and display account balance
+async function fetchAccountBalance() {
+    const response = await fetch("/api/account");
+    const account = await response.json();
+    balanceSpan.innerText = account.balance.toFixed(2);
 }
 
 // Function to toggle theme
@@ -175,8 +239,15 @@ orderForm.addEventListener("submit", placeBuyOrder);
 sellForm.addEventListener("submit", placeSellOrder);
 themeToggle.addEventListener("change", toggleTheme);
 
-
 // Initial data fetch
+document.getElementsByClassName("tablink")[0].click();
 fetchProfile();
+fetchAccountBalance();
 fetchPortfolio();
-setInterval(fetchPortfolio, 30000);
+fetchPendingOrders();
+fetchTradeHistory();
+setInterval(() => {
+    fetchPortfolio();
+    fetchPendingOrders();
+    fetchTradeHistory();
+}, 30000);
