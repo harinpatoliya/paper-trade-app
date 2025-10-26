@@ -1,13 +1,16 @@
 from flask import Flask, jsonify, request, send_from_directory
 from fyers_auth import get_fyers_model
+from flask_socketio import SocketIO
 import sqlite3
 import os
 import time
 import threading
 from datetime import datetime
 import pytz
+from fyers_apiv3.FyersWebsocket import data_ws
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
+socketio = SocketIO(app)
 
 # Create logs directory if it doesn't exist
 if not os.path.exists("backend/logs"):
@@ -70,6 +73,25 @@ def is_market_open():
     market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return market_open <= now <= market_close
 
+def on_price_update(message):
+    socketio.emit('price_update', message)
+
+def run_websocket():
+    # Fetch symbols from portfolio
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT symbol FROM portfolio")
+    symbols = [row[0] for row in c.fetchall()]
+    conn.close()
+
+    if symbols:
+        fyers_socket = data_ws.FyersDataSocket(
+            access_token=fyers.token,
+            log_path="backend/logs"
+        )
+        fyers_socket.subscribe(symbols=symbols)
+        fyers_socket.on_message = on_price_update
+
 def execute_pending_orders():
     while True:
         if is_market_open():
@@ -119,6 +141,7 @@ def execute_pending_orders():
         time.sleep(10) # Check every 10 seconds
 
 threading.Thread(target=execute_pending_orders, daemon=True).start()
+threading.Thread(target=run_websocket, daemon=True).start()
 
 @app.route("/")
 def index():
@@ -268,4 +291,4 @@ def place_order():
     return jsonify({"message": "Order placed successfully", "order_id": order_id})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)

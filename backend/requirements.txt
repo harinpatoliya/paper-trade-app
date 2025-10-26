@@ -2,3 +2,4 @@ fyers-apiv3
 Flask
 python-dotenv
 pytz
+Flask-SocketIO
