@@ -1,19 +1,87 @@
 from flask import Flask, jsonify, request, send_from_directory
 from fyers_auth import get_fyers_model
+from flask_socketio import SocketIO
 import sqlite3
 import os
 import time
 import threading
 from datetime import datetime
 import pytz
+from fyers_apiv3.FyersWebsocket import data_ws
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
+socketio = SocketIO(app)
+
+class WebSocketManager:
+    def __init__(self, fyers_model, on_message_callback):
+        self.fyers_model = fyers_model
+        self.on_message = on_message_callback
+        self.ws = None
+        self.subscribed_symbols = set()
+        self.lock = threading.Lock()
+        self.thread = None
+
+    def start(self):
+        # Initial subscription from portfolio
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT symbol FROM portfolio")
+        initial_symbols = [row[0] for row in c.fetchall()]
+        conn.close()
+        if initial_symbols:
+            self.subscribed_symbols.update(initial_symbols)
+
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        self.ws = data_ws.FyersDataSocket(
+            access_token=self.fyers_model.token,
+            log_path="backend/logs"
+        )
+        self.ws.on_message = self.on_message
+        self.ws.on_connect = self._on_connect
+        self.ws.connect()
+
+    def _on_connect(self):
+        print("WebSocket connected. Resubscribing to symbols...")
+        with self.lock:
+            if self.subscribed_symbols:
+                self.ws.subscribe(list(self.subscribed_symbols))
+
+    def subscribe(self, symbols):
+        with self.lock:
+            new_symbols = [s for s in symbols if s not in self.subscribed_symbols]
+            if not new_symbols:
+                return
+
+            self.subscribed_symbols.update(new_symbols)
+            if self.ws and self.ws.is_connected():
+                self.ws.subscribe(symbols=new_symbols)
+            print(f"Subscribed to: {new_symbols}")
+
+    def unsubscribe(self, symbols):
+        with self.lock:
+            symbols_to_unsubscribe = [s for s in symbols if s in self.subscribed_symbols]
+            if not symbols_to_unsubscribe:
+                return
+
+            for s in symbols_to_unsubscribe:
+                self.subscribed_symbols.remove(s)
+
+            if self.ws and self.ws.is_connected():
+                self.ws.unsubscribe(symbols=symbols_to_unsubscribe)
+            print(f"Unsubscribed from: {symbols_to_unsubscribe}")
+
+def on_price_update(message):
+    socketio.emit('price_update', message)
+
+fyers = get_fyers_model()
+websocket_manager = WebSocketManager(fyers, on_price_update)
 
 # Create logs directory if it doesn't exist
 if not os.path.exists("backend/logs"):
     os.makedirs("backend/logs")
-
-fyers = get_fyers_model()
 
 # Database setup
 DB_FILE = "backend/paper_trading.db"
@@ -70,6 +138,7 @@ def is_market_open():
     market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return market_open <= now <= market_close
 
+
 def execute_pending_orders():
     while True:
         if is_market_open():
@@ -119,6 +188,7 @@ def execute_pending_orders():
         time.sleep(10) # Check every 10 seconds
 
 threading.Thread(target=execute_pending_orders, daemon=True).start()
+websocket_manager.start()
 
 @app.route("/")
 def index():
@@ -157,8 +227,21 @@ def get_portfolio():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT symbol, quantity, avg_price, notes FROM portfolio")
-    portfolio = [{"symbol": row[0], "quantity": row[1], "avg_price": row[2], "notes": row[3]} for row in c.fetchall()]
+    portfolio_data = c.fetchall()
     conn.close()
+
+    portfolio = []
+    for row in portfolio_data:
+        symbol, quantity, avg_price, notes = row
+        position_size = quantity * avg_price
+        portfolio.append({
+            "symbol": symbol,
+            "quantity": quantity,
+            "avg_price": avg_price,
+            "notes": notes,
+            "position_size": position_size
+        })
+
     return jsonify(portfolio)
 
 @app.route("/api/pending_orders")
@@ -262,10 +345,16 @@ def place_order():
         new_balance = balance - (quantity * price)
         c.execute("UPDATE account SET balance=?", (new_balance,))
 
+        # Subscribe/Unsubscribe from WebSocket
+        if quantity > 0:
+            websocket_manager.subscribe([symbol])
+        elif new_quantity <= 0:
+            websocket_manager.unsubscribe([symbol])
+
     conn.commit()
     conn.close()
 
     return jsonify({"message": "Order placed successfully", "order_id": order_id})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)

@@ -9,6 +9,11 @@ const usernameSpan = document.getElementById("username");
 const accountIdSpan = document.getElementById("account-id");
 const balanceSpan = document.getElementById("balance");
 const themeToggle = document.getElementById("theme-toggle");
+const socket = io();
+
+socket.on('price_update', function(data) {
+    updatePortfolioWithRealtimeData(data);
+});
 
 function openTab(evt, tabName) {
     var i, tabcontent, tablinks;
@@ -32,40 +37,20 @@ async function fetchPortfolio() {
     // Clear the table
     portfolioTable.innerHTML = "";
 
-    // Get all symbols to fetch quotes in a single request
-    const symbols = portfolio.map(item => item.symbol).join(",");
-    if (!symbols) {
-        return;
-    }
-
-    const quoteResponse = await fetch(`/api/quotes?symbols=${symbols}`);
-    const quotes = await quoteResponse.json();
-
-    // Create a map of symbols to their current prices
-    const priceMap = {};
-    if (quotes.d) {
-        quotes.d.forEach(quote => {
-            priceMap[quote.n] = quote.v.lp;
-        });
-    }
-
     // Populate the table with portfolio data
     for (const item of portfolio) {
         const row = portfolioTable.insertRow();
         row.insertCell(0).innerText = item.symbol;
         row.insertCell(1).innerText = item.quantity;
         row.insertCell(2).innerText = item.avg_price;
+        row.insertCell(3).innerText = item.position_size.toFixed(2);
 
-        const currentPrice = priceMap[item.symbol] || 0;
-        const pnl = (currentPrice - item.avg_price) * item.quantity;
-        const pnlPercent = ((pnl / (item.avg_price * item.quantity)) * 100).toFixed(2);
-
-        row.insertCell(3).innerText = currentPrice;
-        row.insertCell(4).innerText = pnl.toFixed(2);
-        row.insertCell(5).innerText = `${pnlPercent}%`;
+        row.insertCell(4).innerText = "Loading..."; // Current Price
+        row.insertCell(5).innerText = "Loading..."; // P&L
+        row.insertCell(6).innerText = "Loading..."; // P&L %
 
         // Notes
-        const notesCell = row.insertCell(6);
+        const notesCell = row.insertCell(7);
         notesCell.innerText = item.notes;
         const editButton = document.createElement("button");
         editButton.innerText = "Edit";
@@ -77,6 +62,23 @@ async function fetchPortfolio() {
         sellButton.innerText = "Sell";
         sellButton.addEventListener("click", () => openSellModal(item.symbol, item.quantity));
         row.insertCell(7).appendChild(sellButton);
+    }
+}
+
+function updatePortfolioWithRealtimeData(data) {
+    for (let i = 0; i < portfolioTable.rows.length; i++) {
+        const row = portfolioTable.rows[i];
+        const symbol = row.cells[0].innerText;
+        if (data.symbol === symbol) {
+            const quantity = parseFloat(row.cells[1].innerText);
+            const avg_price = parseFloat(row.cells[2].innerText);
+            const currentPrice = data.lp;
+            const pnl = (currentPrice - avg_price) * quantity;
+            const pnlPercent = ((pnl / (avg_price * quantity)) * 100).toFixed(2);
+            row.cells[4].innerText = currentPrice;
+            row.cells[5].innerText = pnl.toFixed(2);
+            row.cells[6].innerText = `${pnlPercent}%`;
+        }
     }
 }
 
@@ -246,8 +248,3 @@ fetchAccountBalance();
 fetchPortfolio();
 fetchPendingOrders();
 fetchTradeHistory();
-setInterval(() => {
-    fetchPortfolio();
-    fetchPendingOrders();
-    fetchTradeHistory();
-}, 30000);
