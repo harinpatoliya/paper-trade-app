@@ -43,13 +43,14 @@ async function fetchPortfolio() {
         row.insertCell(0).innerText = item.symbol;
         row.insertCell(1).innerText = item.quantity;
         row.insertCell(2).innerText = item.avg_price;
+        row.insertCell(3).innerText = item.position_size.toFixed(2);
 
-        row.insertCell(3).innerText = "Loading...";
-        row.insertCell(4).innerText = "Loading...";
-        row.insertCell(5).innerText = "Loading...";
+        row.insertCell(4).innerText = "Loading..."; // Current Price
+        row.insertCell(5).innerText = "Loading..."; // P&L
+        row.insertCell(6).innerText = "Loading..."; // P&L %
 
         // Notes
-        const notesCell = row.insertCell(6);
+        const notesCell = row.insertCell(7);
         notesCell.innerText = item.notes;
         const editButton = document.createElement("button");
         editButton.innerText = "Edit";
@@ -74,9 +75,9 @@ function updatePortfolioWithRealtimeData(data) {
             const currentPrice = data.lp;
             const pnl = (currentPrice - avg_price) * quantity;
             const pnlPercent = ((pnl / (avg_price * quantity)) * 100).toFixed(2);
-            row.cells[3].innerText = currentPrice;
-            row.cells[4].innerText = pnl.toFixed(2);
-            row.cells[5].innerText = `${pnlPercent}%`;
+            row.cells[4].innerText = currentPrice;
+            row.cells[5].innerText = pnl.toFixed(2);
+            row.cells[6].innerText = `${pnlPercent}%`;
         }
     }
 }
