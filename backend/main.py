@@ -13,7 +13,7 @@ import pytz
 from fyers_apiv3.FyersWebsocket import data_ws
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
-socketio = SocketIO(app)
+socketio = SocketIO(app, async_mode='eventlet')
 
 class WebSocketManager:
     def __init__(self, fyers_model, on_message_callback):
