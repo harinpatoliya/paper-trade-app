@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, jsonify, request, send_from_directory
 from fyers_auth import get_fyers_model
 from flask_socketio import SocketIO
@@ -359,6 +356,3 @@ def place_order():
     conn.close()
 
     return jsonify({"message": "Order placed successfully", "order_id": order_id})
-
-if __name__ == "__main__":
-    socketio.run(app, debug=True)
