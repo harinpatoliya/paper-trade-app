@@ -74,7 +74,8 @@ class WebSocketManager:
             print(f"Unsubscribed from: {symbols_to_unsubscribe}")
 
 def on_price_update(message):
-    socketio.emit('price_update', message)
+    for stock_data in message:
+        socketio.emit('price_update', stock_data)
 
 # Create logs directory if it doesn't exist
 if not os.path.exists("backend/logs"):
