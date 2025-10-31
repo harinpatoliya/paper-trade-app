@@ -76,12 +76,12 @@ class WebSocketManager:
 def on_price_update(message):
     socketio.emit('price_update', message)
 
-fyers = get_fyers_model()
-websocket_manager = WebSocketManager(fyers, on_price_update)
-
 # Create logs directory if it doesn't exist
 if not os.path.exists("backend/logs"):
     os.makedirs("backend/logs")
+
+fyers = get_fyers_model()
+websocket_manager = WebSocketManager(fyers, on_price_update)
 
 # Database setup
 DB_FILE = "backend/paper_trading.db"
