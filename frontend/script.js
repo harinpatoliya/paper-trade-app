@@ -72,7 +72,7 @@ function updatePortfolioWithRealtimeData(data) {
         if (data.symbol === symbol) {
             const quantity = parseFloat(row.cells[1].innerText);
             const avg_price = parseFloat(row.cells[2].innerText);
-            const currentPrice = data.lp;
+            const currentPrice = data.ltp;
             const pnl = (currentPrice - avg_price) * quantity;
             const pnlPercent = ((pnl / (avg_price * quantity)) * 100).toFixed(2);
             row.cells[4].innerText = currentPrice;

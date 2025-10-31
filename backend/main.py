@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, jsonify, request, send_from_directory
 from fyers_auth import get_fyers_model
 from flask_socketio import SocketIO
@@ -74,7 +77,8 @@ class WebSocketManager:
             print(f"Unsubscribed from: {symbols_to_unsubscribe}")
 
 def on_price_update(message):
-    socketio.emit('price_update', message)
+    for stock_data in message:
+        socketio.emit('price_update', stock_data)
 
 # Create logs directory if it doesn't exist
 if not os.path.exists("backend/logs"):
@@ -357,4 +361,4 @@ def place_order():
     return jsonify({"message": "Order placed successfully", "order_id": order_id})
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, debug=True)
